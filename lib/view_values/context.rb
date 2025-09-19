@@ -14,7 +14,31 @@ module ViewValues
 
       helpers.each do |m|
         sym = m.to_sym
-        @data[sym] ||= -> { @controller.public_send(sym) }
+        binder = lambda do
+          if @controller.respond_to?(sym)
+            return @controller.public_send(sym)
+          end
+
+          if @controller.respond_to?(:helpers)
+            begin
+              return @controller.helpers.public_send(sym)
+            rescue NoMethodError, NameError
+              # try next
+            end
+          end
+
+          if @controller.respond_to?(:view_context)
+            begin
+              return @controller.view_context.public_send(sym)
+            rescue NoMethodError, NameError
+              # fallthrough
+            end
+          end
+
+          raise NoMethodError, "undefined helper '#{sym}' for #{ViewValues.instance_variable_name}: not found on controller, helpers, or view_context"
+        end
+
+        @data[sym] ||= binder
       end
 
       # root だけ dot アクセス
