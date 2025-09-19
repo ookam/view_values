@@ -21,9 +21,9 @@ module ViewValues
 
         # ビルド時に存在検証（実際の呼び出しは行わない）
         exists =
-          @controller.respond_to?(sym) ||
-          (@controller.respond_to?(:helpers) && @controller.helpers.respond_to?(sym)) ||
-          (@controller.respond_to?(:view_context) && @controller.view_context.respond_to?(sym))
+          @controller.respond_to?(sym, true) ||
+          (@controller.respond_to?(:helpers) && @controller.helpers.respond_to?(sym, true)) ||
+          (@controller.respond_to?(:view_context) && @controller.view_context.respond_to?(sym, true))
 
         unless exists
           raise NoMethodError, "undefined helper '#{sym}' for #{ViewValues.instance_variable_name}: not found on controller, helpers, or view_context"
