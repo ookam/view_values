@@ -27,7 +27,7 @@ Gem::Specification.new do |s|
   )
 
   s.bindir      = 'exe'
-  s.executables = []
+  s.executables = Dir.children('exe')
   s.require_paths = ['lib']
 
   s.add_dependency 'activesupport', '>= 6.1'

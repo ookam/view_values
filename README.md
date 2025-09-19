@@ -96,6 +96,26 @@ bundle exec rubocop    # 静的解析
 bundle exec rake       # デフォルトは spec
 ```
 
+## CLI チェック（オプション）
+
+プロジェクト全体を静的に走査し、各コントローラのアクションで宣言したキー（`build_view_values` の data/`helpers:`）と、ビューで実際に使っているキーが整合しているかをチェックできます。
+
+実行例:
+```bash
+bundle exec view_values check
+```
+
+オプション:
+- `--root=PATH`: 解析するプロジェクトのルート（デフォルト: カレント）
+- `--instance-var=name`: インスタンス変数名（デフォルト: `view_values` → `@view_values`）
+- `--check-unused`: 宣言されているが未使用のキーもエラー扱いにする
+- `--include=GLOB`: 対象コントローラをグロブで絞り込み
+
+仕様/制約:
+- ビューの実使用は `@<name>.key` の正規表現で抽出（`.try/.send/.public_send` は除外）。
+- コメントでの明示許可: `<%# use: @view_values.user, @view_values.post.title %>`（ネストはルートキーのみ判定）
+- パーシャル/レイアウトの追跡は未対応（将来拡張）。
+
 ---
 
 MIT License
