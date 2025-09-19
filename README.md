@@ -96,25 +96,39 @@ bundle exec rubocop    # 静的解析
 bundle exec rake       # デフォルトは spec
 ```
 
-## CLI チェック（オプション）
+## CLI チェック
 
 プロジェクト全体を静的に走査し、各コントローラのアクションで宣言したキー（`build_view_values` の data/`helpers:`）と、ビューで実際に使っているキーが整合しているかをチェックできます。
 
 実行例:
+
 ```bash
 bundle exec view_values check
 ```
 
+デフォルト動作:
+
+- 未宣言の使用はエラー（missing）
+- 宣言されているが未使用のキーもエラー（unused）
+
 オプション:
+
 - `--root=PATH`: 解析するプロジェクトのルート（デフォルト: カレント）
 - `--instance-var=name`: インスタンス変数名（デフォルト: `view_values` → `@view_values`）
-- `--check-unused`: 宣言されているが未使用のキーもエラー扱いにする
+- `--check-unused`: 互換目的（デフォルトで未使用もエラー）
 - `--include=GLOB`: 対象コントローラをグロブで絞り込み
+ - `--only-action=NAME`: 単一アクション（メソッド名）に限定してチェック
 
 仕様/制約:
+
 - ビューの実使用は `@<name>.key` の正規表現で抽出（`.try/.send/.public_send` は除外）。
 - コメントでの明示許可: `<%# use: @view_values.user, @view_values.post.title %>`（ネストはルートキーのみ判定）
 - パーシャル/レイアウトの追跡は未対応（将来拡張）。
+
+備考:
+- `build_view_values` が複数行でも解析されます。
+- `helpers:` は `%i[...]` / `%I[...]` / `[:sym, 'str']` に対応。
+- `data` は `{'str' => 1, sym: 2}` のようなキーも抽出対象（ビュー側は `@view_values.str` / `@view_values.sym`）。
 
 ---
 
