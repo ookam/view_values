@@ -12,8 +12,23 @@ module ViewValues
       @controller = controller
       @data = data.to_h.symbolize_keys
 
-      helpers.each do |m|
-        sym = m.to_sym
+      helpers.map { |m| m.to_sym }.uniq.each do |sym|
+
+        # data と helpers の同名衝突は即時エラー
+        if @data.key?(sym)
+          raise ArgumentError, "conflicting key '#{sym}' given in both data and helpers for #{ViewValues.instance_variable_name}"
+        end
+
+        # ビルド時に存在検証（実際の呼び出しは行わない）
+        exists =
+          @controller.respond_to?(sym) ||
+          (@controller.respond_to?(:helpers) && @controller.helpers.respond_to?(sym)) ||
+          (@controller.respond_to?(:view_context) && @controller.view_context.respond_to?(sym))
+
+        unless exists
+          raise NoMethodError, "undefined helper '#{sym}' for #{ViewValues.instance_variable_name}: not found on controller, helpers, or view_context"
+        end
+
         binder = lambda do
           if @controller.respond_to?(sym)
             return @controller.public_send(sym)
@@ -38,7 +53,7 @@ module ViewValues
           raise NoMethodError, "undefined helper '#{sym}' for #{ViewValues.instance_variable_name}: not found on controller, helpers, or view_context"
         end
 
-        @data[sym] ||= binder
+        @data[sym] = binder
       end
 
       # root だけ dot アクセス

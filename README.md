@@ -73,7 +73,8 @@ end
 - `build_view_values(data, helpers:)` はコントローラ自身を暗黙にキャプチャ
 - `data` のキーは `symbolize_keys` 済み。キーは dot アクセスのみ可能
 - `helpers:` に列挙したメソッドは遅延評価でバインド
-- `data` に同名キーがあれば helper より優先
+- `helpers:` で指定したメソッドはビルド時に存在検証（controller/helpers/view_context）
+- `data` と `helpers` に同名キーがある場合はビルド時に例外を送出（衝突の早期検知）
 - 未定義キーは `NoMethodError` を送出（誤字に強い）
 
 ### 動作環境

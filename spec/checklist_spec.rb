@@ -57,16 +57,18 @@ RSpec.describe 'README checklist' do
       expect(c.view_values.current_user).to eq :after
     end
 
-    it 'data takes precedence over helpers on conflict' do
+    it 'raises when data and helpers have the same key' do
       c = controller_class.new
-      c.build_view_values({ current_user: :x }, helpers: %i[current_user])
-      expect(c.view_values.current_user).to eq :x
+      expect {
+        c.build_view_values({ current_user: :x }, helpers: %i[current_user])
+      }.to raise_error(ArgumentError, /conflicting key 'current_user'/)
     end
 
-    it 'non-existent helper does not predefine a method (raises on access)' do
+    it 'non-existent helper raises at build time' do
       c = controller_class.new
-      c.build_view_values({}, helpers: %i[nonexistent])
-      expect { c.view_values.nonexistent }.to raise_error(NoMethodError)
+      expect {
+        c.build_view_values({}, helpers: %i[nonexistent])
+      }.to raise_error(NoMethodError, /undefined helper 'nonexistent'/)
     end
   end
 

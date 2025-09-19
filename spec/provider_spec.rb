@@ -25,4 +25,10 @@ RSpec.describe ViewValues::Provider do
     expect(vv.current_user.name).to eq "Bob"
     expect(vv.is_login?).to be true
   end
+
+  it "raises early if helper name is unknown" do
+    expect {
+      controller.build_view_values({}, helpers: %i[unknown_helper])
+    }.to raise_error(NoMethodError, /undefined helper 'unknown_helper'/)
+  end
 end
