@@ -20,7 +20,8 @@ module ViewValues
         check_unused: true,
         include: nil,
         format: 'text',
-        only_action: nil
+        only_action: nil,
+        verbose: false
       }
 
       parser = OptionParser.new do |o|
@@ -31,6 +32,7 @@ module ViewValues
         o.on('--include=GLOB', 'Limit controllers to glob (relative to root)') { |v| opts[:include] = v }
   o.on('--format=FORMAT', 'text (default) | json (reserved)') { |v| opts[:format] = v }
   o.on('--only-action=NAME', 'Limit check to a specific action name') { |v| opts[:only_action] = v.to_s }
+    o.on('--verbose', 'Show detailed file list and summary (or set VERBOSE=1)') { opts[:verbose] = true }
       end
 
       cmd = argv.shift
@@ -55,20 +57,34 @@ module ViewValues
         @include = opts[:include]
         @format = opts[:format]
         @only_action = opts[:only_action]
+        @verbose = opts[:verbose] || ENV['VERBOSE'].to_s == '1'
+
+        # Stats & file tracking
+        @controllers_seen = Set.new
+        @views_seen = Set.new
+        @actions_checked = 0
+        @missing_total = 0
+        @unused_total = 0
       end
 
       def call
         reports = []
         controller_files.each do |file|
+          @controllers_seen << file
           controller_name = path_to_controller_name(file)
           declared = extract_declared(file)
           declared.each do |action, keys|
             next if @only_action && action != @only_action
+            @actions_checked += 1
             used = extract_used_keys(controller_name, action)
             missing = used - keys
             unused = keys - used
+            views = view_files(controller_name, action)
+            views.each { |vf| @views_seen << vf }
+            @missing_total += missing.length
+            @unused_total += unused.length
             if !missing.empty? || (@check_unused && !unused.empty?)
-              reports << { controller: controller_name, action: action, missing: missing.to_a.sort, unused: unused.to_a.sort, views: view_files(controller_name, action) }
+              reports << { controller: controller_name, action: action, missing: missing.to_a.sort, unused: unused.to_a.sort, views: views }
             end
           end
         end
@@ -76,7 +92,9 @@ module ViewValues
         reports.empty? ? 0 : 1
       end
       def extract_declared(path)
-        src = File.read(path)
+        # Read as UTF-8 regardless of default external encoding to avoid
+        # "invalid byte sequence in US-ASCII" when running under ASCII locales.
+        src = File.read(path, mode: 'r:bom|utf-8')
         lines = src.lines
         actions = {}
         current_action = nil
@@ -152,7 +170,8 @@ module ViewValues
         files = view_files(controller_name, action)
         used = Set.new
         files.each do |f|
-          content = File.read(f)
+          # Force UTF-8 read to survive non-ASCII templates under ASCII locales
+          content = File.read(f, mode: 'r:bom|utf-8')
           # code usage
           content.scan(/@#{Regexp.escape(@instance_var)}\.(\w[\w!?]*)/) do |(k)|
             next if CODE_KEY_IGNORES.include?(k)
@@ -194,20 +213,52 @@ module ViewValues
       end
 
       def print_reports(reports)
+        # Simple ANSI color helper
+        color = ->(txt, name) do
+          codes = { red: 31, green: 32, yellow: 33, cyan: 36 }
+          code = codes[name] || 0
+          "\e[#{code}m#{txt}\e[0m"
+        end
+
         if @format == 'text'
-          if reports.empty?
-            puts 'view_values check: OK'
-            return
+          # Verbose preface: list targets
+          if @verbose
+            ctrls = @controllers_seen.to_a.sort
+            views = @views_seen.to_a.sort
+            puts color.call("Target controllers (#{ctrls.size}):", :cyan)
+            ctrls.each { |f| puts "  - #{f}" }
+            puts color.call("Target views (#{views.size}):", :cyan)
+            views.each { |f| puts "  - #{f}" }
+            puts
           end
-          reports.each do |r|
-            puts "NG: #{r[:controller]}##{r[:action]}"
-            puts "  views: #{r[:views].join(', ')}"
-            unless r[:missing].empty?
-              puts "  missing (used but not declared): #{r[:missing].join(', ')}"
+
+          if reports.empty?
+            puts color.call('view_values check: OK', :green)
+          else
+            reports.each do |r|
+              puts color.call("NG: #{r[:controller]}##{r[:action]}", :red)
+              puts "  views: #{r[:views].join(', ')}"
+              unless r[:missing].empty?
+                puts "  missing (used but not declared): #{r[:missing].join(', ')}"
+              end
+              unless r[:unused].empty?
+                puts "  unused (declared but not used): #{r[:unused].join(', ')}"
+              end
             end
-            unless r[:unused].empty?
-              puts "  unused (declared but not used): #{r[:unused].join(', ')}"
-            end
+          end
+
+          # Summary
+          puts
+          puts '==== Summary ===='
+          puts "Controllers scanned: #{@controllers_seen.size}"
+          puts "Views scanned: #{@views_seen.size}"
+          puts "Actions checked: #{@actions_checked}"
+          if reports.empty?
+            puts color.call('✅ No issues detected.', :green)
+          else
+            puts color.call("Issues: #{reports.length} actions with problems", :red)
+            puts color.call("Total missing keys: #{@missing_total}", :red)
+            puts color.call("Total unused keys: #{@unused_total}", :yellow)
           end
         else
           # reserved for json output later
