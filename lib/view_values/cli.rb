@@ -49,6 +49,8 @@ module ViewValues
 
     class Check
       VIEW_EXTS = %w[erb haml slim].freeze
+      SKIP_FRAGMENT = ' skip:view_values'.freeze
+      SKIP_DIRECTIVE = 'skip:view_values'.freeze
 
       def initialize(opts)
         @root = opts[:root]
@@ -65,6 +67,7 @@ module ViewValues
         @actions_checked = 0
         @missing_total = 0
         @unused_total = 0
+        @skipped_directives = []
       end
 
       def call
@@ -72,20 +75,37 @@ module ViewValues
         controller_files.each do |file|
           @controllers_seen << file
           controller_name = path_to_controller_name(file)
-          declared = extract_declared(file)
+          declared, skip_actions = extract_declared(file)
           declared.each do |action, keys|
             next if @only_action && action != @only_action
-            @actions_checked += 1
-            used = extract_used_keys(controller_name, action)
-            missing = used - keys
-            unused = keys - used
+
+            if (skip_reason = skip_actions[action])
+              @skipped_directives << { controller: controller_name, action: action, reason: skip_reason, views: [] }
+              next
+            end
+
             views = view_files(controller_name, action)
             views.each { |vf| @views_seen << vf }
+            used, skip_action, skipped_views = extract_used_keys(views)
+            if skip_action
+              @skipped_directives << { controller: controller_name, action: action, reason: :view, views: skipped_views }
+              next
+            end
+
+            @actions_checked += 1
+            missing = used - keys
+            unused = keys - used
             @missing_total += missing.length
             @unused_total += unused.length
             if !missing.empty? || (@check_unused && !unused.empty?)
               reports << { controller: controller_name, action: action, missing: missing.to_a.sort, unused: unused.to_a.sort, views: views }
             end
+          end
+
+          skip_actions.each do |action, reason|
+            next if declared.key?(action)
+            next if @only_action && action != @only_action
+            @skipped_directives << { controller: controller_name, action: action, reason: reason, views: [] }
           end
         end
         print_reports(reports)
@@ -98,80 +118,97 @@ module ViewValues
         lines = src.lines
         actions = {}
         current_action = nil
+        skip_actions = {}
+        current_skip = false
 
         i = 0
         while i < lines.length
           line = lines[i]
           if (m = line.match(/^\s*def\s+([a-zA-Z0-9_!?]+)/))
             current_action = m[1]
+            current_skip = false
           elsif line =~ /^\s*end\s*$/
+            if current_action && current_skip
+              skip_actions[current_action] = :controller
+            end
             current_action = nil
+            current_skip = false
           end
 
-          if current_action && line.include?('build_view_values')
-            call_str = line[line.index('build_view_values')..-1]
-            paren_depth = call_str.count('(') - call_str.count(')')
-            j = i + 1
-            while paren_depth > 0 && j < lines.length
-              call_str << lines[j]
+          if current_action
+            current_skip ||= skip_directive?(line)
+
+            if line.include?('build_view_values')
+              call_str = line[line.index('build_view_values')..-1]
               paren_depth = call_str.count('(') - call_str.count(')')
-              j += 1
-            end
+              j = i + 1
+              while paren_depth > 0 && j < lines.length
+                call_str << lines[j]
+                paren_depth = call_str.count('(') - call_str.count(')')
+                j += 1
+              end
 
-            declared = Set.new
-            call_str.scan(/\{[^}]*\}/m).each do |h|
-              # keep only top-level of the outermost hash literal
-              next unless h.start_with?('{') && h.end_with?('}')
-              inner = h[1..-2]
-              # remove all parenthesized/bracketed content conservatively
-              prev = nil
-              while prev != inner
-                prev = inner
-                inner = inner.gsub(/\([^()]*\)/, '')
-                inner = inner.gsub(/\[[^\[\]]*\]/, '')
+              declared = Set.new
+              call_str.scan(/\{[^}]*\}/m).each do |h|
+                # keep only top-level of the outermost hash literal
+                next unless h.start_with?('{') && h.end_with?('}')
+                inner = h[1..-2]
+                # remove all parenthesized/bracketed content conservatively
+                prev = nil
+                while prev != inner
+                  prev = inner
+                  inner = inner.gsub(/\([^()]*\)/, '')
+                  inner = inner.gsub(/\[[^\[\]]*\]/, '')
+                end
+                # remove nested braces within the inner content, but keep outer
+                prev = nil
+                while prev != inner
+                  prev = inner
+                  inner = inner.gsub(/\{[^{}]*\}/, '')
+                end
+                sanitized = '{' + inner + '}'
+                # symbol-label style: a: 1
+                sanitized.scan(/\{[^}]*\}/m) do |top|
+                  top.scan(/(^|,|\{)\s*([a-zA-Z_]\w*[!?]?)\s*:/) { |_, k| declared << k }
+                  # string/rocket style: 'a' => 1
+                  top.scan(/(^|,|\{)\s*['"]([a-zA-Z_]\w*[!?]?)['"]\s*=>/) { |_, k| declared << k }
+                end
               end
-              # remove nested braces within the inner content, but keep outer
-              prev = nil
-              while prev != inner
-                prev = inner
-                inner = inner.gsub(/\{[^{}]*\}/, '')
-              end
-              sanitized = '{' + inner + '}'
-              # symbol-label style: a: 1
-              sanitized.scan(/\{[^}]*\}/m) do |top|
-                top.scan(/(^|,|\{)\s*([a-zA-Z_]\w*[!?]?)\s*:/) { |_, k| declared << k }
-                # string/rocket style: 'a' => 1
-                top.scan(/(^|,|\{)\s*['"]([a-zA-Z_]\w*[!?]?)['"]\s*=>/) { |_, k| declared << k }
-              end
-            end
 
-            if (m = call_str.match(/helpers:\s*(%i\[[^\]]*\]|%I\[[^\]]*\]|\[[^\]]*\])/m))
-              lit = m[1]
-              if lit.start_with?('%i', '%I')
-                inner = lit.sub(/^%[iI]\[/, '').sub(/\]\z/, '')
-                inner.scan(/([a-zA-Z_]\w*[!?]?)/) { |(k)| declared << k }
-              else
-                lit.scan(/[:'\"]([a-zA-Z_]\w*[!?]?)/) { |(k)| declared << k }
+              if (m = call_str.match(/helpers:\s*(%i\[[^\]]*\]|%I\[[^\]]*\]|\[[^\]]*\])/m))
+                lit = m[1]
+                if lit.start_with?('%i', '%I')
+                  inner = lit.sub(/^%[iI]\[/, '').sub(/\]\z/, '')
+                  inner.scan(/([a-zA-Z_]\w*[!?]?)/) { |(k)| declared << k }
+                else
+                  lit.scan(/[:'\"]([a-zA-Z_]\w*[!?]?)/) { |(k)| declared << k }
+                end
               end
-            end
 
-            actions[current_action] ||= Set.new
-            actions[current_action].merge(declared)
-            i = j - 1 if defined?(j) && j && j > i
+              actions[current_action] ||= Set.new
+              actions[current_action].merge(declared)
+              i = j - 1 if defined?(j) && j && j > i
+            end
           end
 
           i += 1
         end
 
-        actions
+        [actions, skip_actions]
       end
 
-      def extract_used_keys(controller_name, action)
-        files = view_files(controller_name, action)
+      def extract_used_keys(files)
         used = Set.new
+        skipped_files = []
+        active_file_present = false
         files.each do |f|
           # Force UTF-8 read to survive non-ASCII templates under ASCII locales
           content = File.read(f, mode: 'r:bom|utf-8')
+          if skip_directive?(content)
+            skipped_files << f
+            next
+          end
+          active_file_present = true
           # code usage
           content.scan(/@#{Regexp.escape(@instance_var)}\.(\w[\w!?]*)/) do |(k)|
             next if CODE_KEY_IGNORES.include?(k)
@@ -184,7 +221,12 @@ module ViewValues
             end
           end
         end
-        used
+        skip_action = !active_file_present && !files.empty?
+        [used, skip_action, skipped_files]
+      end
+
+      def skip_directive?(text)
+        text.include?(SKIP_FRAGMENT) || text.lstrip.start_with?(SKIP_DIRECTIVE)
       end
 
       def controller_files
@@ -230,6 +272,24 @@ module ViewValues
             puts color.call("Target views (#{views.size}):", :cyan)
             views.each { |f| puts "  - #{f}" }
             puts
+          end
+
+          skip_count = @skipped_directives.length
+          if skip_count.positive?
+            plural = skip_count == 1 ? '' : 's'
+            puts color.call("view_values check: *SKIP* (#{skip_count} action#{plural})", :yellow)
+            if @verbose
+              @skipped_directives.each do |sk|
+                reason = sk[:reason] == :controller ? 'controller directive' : 'view directive'
+                detail = if sk[:views].empty?
+                           reason
+                         else
+                           "#{reason}: #{sk[:views].join(', ')}"
+                         end
+                puts "  - #{sk[:controller]}##{sk[:action]} (#{detail})"
+              end
+              puts
+            end
           end
 
           if reports.empty?

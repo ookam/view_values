@@ -117,7 +117,22 @@ bundle exec view_values check
 - `--instance-var=name`: インスタンス変数名（デフォルト: `view_values` → `@view_values`）
 - `--check-unused`: 互換目的（デフォルトで未使用もエラー）
 - `--include=GLOB`: 対象コントローラをグロブで絞り込み
- - `--only-action=NAME`: 単一アクション（メソッド名）に限定してチェック
+- `--only-action=NAME`: 単一アクション（メソッド名）に限定してチェック
+
+#### チェックを丸ごとスキップしたいとき
+
+アクションやビューに ` skip:view_values` という文字列が入っていれば、その単位の検証を丸ごと飛ばします。
+
+```rb
+def draft
+	# skip:view_values
+	build_view_values({})
+end
+```
+
+```erb
+<!-- skip:view_values -->
+```
 
 仕様/制約:
 
@@ -126,6 +141,7 @@ bundle exec view_values check
 - パーシャル/レイアウトの追跡は未対応（将来拡張）。
 
 備考:
+
 - `build_view_values` が複数行でも解析されます。
 - `helpers:` は `%i[...]` / `%I[...]` / `[:sym, 'str']` に対応。
 - `data` は `{'str' => 1, sym: 2}` のようなキーも抽出対象（ビュー側は `@view_values.str` / `@view_values.sym`）。
